@@ -440,18 +440,9 @@ private fun StatusRow(modifier: Modifier) {
     val carrier = remember(tick) {
         if (Demo.enabled(ctx)) Demo.CARRIER else ctx.getSystemService(TelephonyManager::class.java)?.networkOperatorName.orEmpty()
     }
-    val battery = remember(tick) { batteryInfo(ctx) }
     Row(modifier, verticalAlignment = Alignment.CenterVertically) {
         Text(carrier, color = P.text, fontSize = 13.us, fontFamily = Op.Body, maxLines = 1, modifier = Modifier.weight(1f))
-        val icon = Modifier.size(17.u)
-        Icon(Icons.Rounded.Bluetooth, null, tint = P.text, modifier = icon)
-        Icon(Icons.Rounded.Wifi, null, tint = P.text, modifier = icon.padding(start = 2.u))
-        Icon(Icons.Rounded.SignalCellularAlt, null, tint = P.text, modifier = icon.padding(start = 2.u))
-        Icon(
-            if (battery.second) Icons.Rounded.BatteryChargingFull else Icons.Rounded.BatteryFull, null,
-            tint = P.text, modifier = Modifier.padding(start = 4.u).size(17.u),
-        )
-        Text("${battery.first}%", color = P.text, fontSize = 13.5.us, fontFamily = Op.Body, fontWeight = FontWeight.Medium)
+        SystemStatusIcons(P.text)
     }
 }
 
