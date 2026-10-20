@@ -1,0 +1,12 @@
+.gradle/
+build/
+app/build/
+local.properties
+*.iml
+.idea/
+.DS_Store
+
+# Raw captures from the phones (personal data) and decompiled OnePlus code: kept local only.
+device/
+work/
+tools/

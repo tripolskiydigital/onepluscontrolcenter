@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">OnePlus Control</string>
+    <string name="a11y_description">Shows an OxygenOS-style notification shade and control center when you swipe down from the status bar.</string>
+</resources>
