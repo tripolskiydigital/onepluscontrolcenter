@@ -92,7 +92,7 @@ class NotifListener : NotificationListenerService() {
 
         // Media notifications become players in the carousel, as on Pixel, and leave the list.
         val media = ranked.mapNotNull { sbn ->
-            mediaToken(sbn)?.let { MediaRepo.Source(sbn.key, it, sbn.notification.contentIntent) }
+            mediaToken(sbn)?.let { MediaRepo.Source(sbn.key, it, sbn.notification.contentIntent, sbn.notification.actions?.toList().orEmpty()) }
         }
         MediaRepo.update(this, media)
         val mediaKeys = media.map { it.key }.toSet()

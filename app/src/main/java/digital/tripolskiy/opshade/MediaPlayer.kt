@@ -159,7 +159,7 @@ fun MediaCard(item: MediaItem, host: ShadeService) {
                         .size(64.u, 44.u)
                         .clip(RoundedCornerShape(18.u))
                         .background(buttonBg)
-                        .clickable { if (item.playing) controls?.pause() else controls?.play() },
+                        .clickable { MediaRepo.command(item.token, if (item.playing) MediaRepo.Cmd.PAUSE else MediaRepo.Cmd.PLAY) },
                     contentAlignment = Alignment.Center,
                 ) {
                     Icon(
@@ -170,16 +170,16 @@ fun MediaCard(item: MediaItem, host: ShadeService) {
             }
             Row(verticalAlignment = Alignment.CenterVertically) {
                 MediaButton(Icons.Rounded.SkipPrevious, "Previous", fg, item.has(PlaybackState.ACTION_SKIP_TO_PREVIOUS)) {
-                    controls?.skipToPrevious()
+                    MediaRepo.command(item.token, MediaRepo.Cmd.PREV)
                 }
                 SeekBar(item, fg, Modifier.weight(1f).padding(horizontal = 6.u)) { ms -> controls?.seekTo(ms) }
                 MediaButton(Icons.Rounded.SkipNext, "Next", fg, item.has(PlaybackState.ACTION_SKIP_TO_NEXT)) {
-                    controls?.skipToNext()
+                    MediaRepo.command(item.token, MediaRepo.Cmd.NEXT)
                 }
                 // App-defined actions (e.g. -15 / +30 seconds), as Pixel shows them after next.
                 item.custom.take(2).forEach { a ->
                     Box(
-                        Modifier.size(36.u).clip(CircleShape).clickable { controls?.sendCustomAction(a.action, a.extras) },
+                        Modifier.size(36.u).clip(CircleShape).clickable { MediaRepo.custom(item.token, a) },
                         contentAlignment = Alignment.Center,
                     ) {
                         a.icon?.let { Image(it, a.name, colorFilter = ColorFilter.tint(fg), modifier = Modifier.size(22.u)) }
