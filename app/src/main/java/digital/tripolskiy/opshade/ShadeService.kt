@@ -133,13 +133,33 @@ class ShadeService : AccessibilityService(), TileHost {
         ) {
             performGlobalAction(GLOBAL_ACTION_DISMISS_NOTIFICATION_SHADE)
         }
-        // Another window took over (home gesture, an app opened from a tile): get out of the way.
-        if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED && controller.isOpen &&
-            pkg != packageName && pkg != "com.android.systemui"
-        ) {
-            controller.close()
+        if (event.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED || pkg == packageName || pkg == "com.android.systemui") return
+        if (!controller.isOpen) {
+            // Remember what is on screen under the shade.
+            frontPkg = pkg
+            return
         }
+        // Another app took over (home gesture, an app opened from a tile): get out of the way. But
+        // the app that was already under the shade also reports a window change when it gets focus
+        // back, e.g. after the system shade we dismissed closes; that must not close ours.
+        val sinceOpen = android.os.SystemClock.uptimeMillis() - openedAt
+        if (pkg == frontPkg) return
+        if (sinceOpen < REFOCUS_GRACE_MS) {
+            // While we are still dismissing the system shade (takeOverFromSystemShade), a window change
+            // is the app under the shade getting focus back; adopt it as the front app.
+            android.util.Log.d("OpShade", "ignored window change from $pkg (${sinceOpen}ms after open)")
+            frontPkg = pkg
+            return
+        }
+        android.util.Log.d("OpShade", "closing: $pkg came to front")
+        frontPkg = pkg
+        controller.close()
     }
+
+    private var frontPkg: String? = null
+    private var openedAt = 0L
+    /** Covers the dismiss loop in takeOverFromSystemShade, which runs for about 1.5 s. */
+    private val REFOCUS_GRACE_MS = 1600L
 
     override fun onInterrupt() {}
 
@@ -265,6 +285,7 @@ class ShadeService : AccessibilityService(), TileHost {
     }
 
     private fun setShadeShown(shown: Boolean) {
+        if (shown) openedAt = android.os.SystemClock.uptimeMillis()
         val f = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
         shadeParams.flags = if (shown) shadeParams.flags and f.inv() else shadeParams.flags or f
         if (!shown) shadeParams.blurBehindRadius = 0
