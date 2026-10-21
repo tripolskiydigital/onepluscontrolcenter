@@ -53,6 +53,7 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.launch
 import kotlin.math.abs
 import kotlin.math.roundToInt
@@ -134,7 +135,9 @@ fun NotificationCard(
                             pastThreshold = past
                             view.performHapticFeedback(android.view.HapticFeedbackConstants.SEGMENT_FREQUENT_TICK)
                         }
-                        scope.launch { offsetX.snapTo(next) }
+                        // Apply the move now, not in a queued coroutine: a queued snap could run after
+                        // the release animation starts, cancel it and leave the card stuck half-way.
+                        scope.launch(start = CoroutineStart.UNDISPATCHED) { offsetX.snapTo(next) }
                     },
                     onDragStarted = { if (offsetX.value == 0f) onMenuOpenChange(false) },
                     onDragStopped = { v ->

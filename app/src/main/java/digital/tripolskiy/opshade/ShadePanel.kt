@@ -129,6 +129,8 @@ fun ShadePanel(controller: ShadeController, tiles: TileRepository, host: ShadeSe
     val states by tiles.state.collectAsState()
     val placed by tiles.placed.collectAsState()
     val notifs by NotifListener.items.collectAsState()
+    val media by MediaRepo.items.collectAsState()
+    val showCcMedia by remember(controller) { derivedStateOf { controller.expansion.value > 1.3f } }
     // Cards the user dismissed, hidden right away. If the system keeps one (it refused the cancel),
     // it comes back after a moment instead of leaving a hole in the list.
     val dismissed = remember { mutableStateMapOf<String, Long>() }
@@ -191,6 +193,11 @@ fun ShadePanel(controller: ShadeController, tiles: TileRepository, host: ShadeSe
                     contentPadding = PaddingValues(start = 16.u, end = 16.u, bottom = 140.u),
                     userScrollEnabled = listScrolls,
                 ) {
+                    if (media.isNotEmpty()) {
+                        item(key = "media") {
+                            MediaCarousel(media, host, Modifier.padding(bottom = 8.u).animateItem())
+                        }
+                    }
                     items(visibleNotifs, key = { it.key }) { n ->
                         NotificationCard(
                             n,
@@ -279,8 +286,19 @@ fun ShadePanel(controller: ShadeController, tiles: TileRepository, host: ShadeSe
                 )
             }
 
+            // In the control center the players sit under the tile grid, as in Pixel's QS.
+            if (showCcMedia && media.isNotEmpty()) {
+                MediaCarousel(
+                    media, host,
+                    Modifier
+                        .padding(horizontal = 16.u)
+                        .offset { p.offset(0f, 590f) }
+                        .graphicsLayer { alpha = frac(p.q(), 0.6f, 1f); translationY = (1f - p.q()) * 40f * p.px },
+                )
+            }
+
             // Clear all.
-            if (showClearAll && visibleNotifs.any { it.clearable }) {
+            if (showClearAll && (visibleNotifs.any { it.clearable })) {
                 Box(
                     Modifier
                         .align(Alignment.BottomCenter)

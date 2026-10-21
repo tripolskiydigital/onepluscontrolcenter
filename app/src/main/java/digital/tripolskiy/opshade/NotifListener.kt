@@ -5,6 +5,7 @@ import android.app.PendingIntent
 import android.content.ComponentName
 import android.content.Context
 import android.graphics.drawable.Drawable
+import android.media.session.MediaSession
 import android.os.Bundle
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
@@ -85,9 +86,17 @@ class NotifListener : NotificationListenerService() {
         }
         val active = try { activeNotifications } catch (_: Exception) { null } ?: return
         val order = currentRanking?.orderedKeys?.withIndex()?.associate { it.value to it.index } ?: emptyMap()
-        val sorted = active
+        val ranked = active
             .filter { it.packageName != packageName }
             .sortedBy { order[it.key] ?: Int.MAX_VALUE }
+
+        // Media notifications become players in the carousel, as on Pixel, and leave the list.
+        val media = ranked.mapNotNull { sbn ->
+            mediaToken(sbn)?.let { MediaRepo.Source(sbn.key, it, sbn.notification.contentIntent) }
+        }
+        MediaRepo.update(this, media)
+        val mediaKeys = media.map { it.key }.toSet()
+        val sorted = ranked.filter { it.key !in mediaKeys }
 
         val byGroup = sorted.groupBy { it.groupKey }
         val out = ArrayList<NotifItem>()
@@ -159,6 +168,12 @@ class NotifListener : NotificationListenerService() {
             autoCancel = n.flags and Notification.FLAG_AUTO_CANCEL != 0,
             channelId = n.channelId,
         )
+    }
+
+    private fun mediaToken(sbn: StatusBarNotification): MediaSession.Token? = try {
+        sbn.notification.extras.getParcelable(Notification.EXTRA_MEDIA_SESSION, MediaSession.Token::class.java)
+    } catch (_: Exception) {
+        null
     }
 
     private fun appIcon(pkg: String): ImageBitmap? = iconCache.getOrPut(pkg) {

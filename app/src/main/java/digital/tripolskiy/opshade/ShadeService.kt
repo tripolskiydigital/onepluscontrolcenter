@@ -123,9 +123,12 @@ class ShadeService : AccessibilityService(), TileHost {
         }
     }
 
+    // While SystemUI opens a dialog we asked for (the output switcher), don't treat it as the system shade.
+    private var allowSystemUiUntil = 0L
+
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         val pkg = event?.packageName?.toString() ?: return
-        if (pkg == "com.android.systemui" && controller.isOpen &&
+        if (pkg == "com.android.systemui" && controller.isOpen && android.os.SystemClock.uptimeMillis() > allowSystemUiUntil &&
             event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
         ) {
             performGlobalAction(GLOBAL_ACTION_DISMISS_NOTIFICATION_SHADE)
@@ -352,6 +355,18 @@ class ShadeService : AccessibilityService(), TileHost {
     fun openShade() {
         tiles.refresh()
         controller.open(1f)
+    }
+
+    /** Pixel's own output switcher (devices, cast, volume) for one player. */
+    fun openOutputSwitcher(pkg: String, token: android.media.session.MediaSession.Token) {
+        allowSystemUiUntil = android.os.SystemClock.uptimeMillis() + 2000
+        controller.close()
+        sendBroadcast(
+            Intent("com.android.systemui.action.LAUNCH_MEDIA_OUTPUT_DIALOG")
+                .setComponent(android.content.ComponentName("com.android.systemui", "com.android.systemui.media.dialog.MediaOutputDialogReceiver"))
+                .putExtra("package_name", pkg)
+                .putExtra("key_media_session_token", token),
+        )
     }
 
     fun openSystemShade() {

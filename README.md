@@ -33,6 +33,12 @@ The OxygenOS 16 notification shade and control center, rebuilt for Google Pixel.
 - **Tall brightness and media-volume sliders.** You drag them relative to where you touch, as on OxygenOS, not jump-to-touch. They stretch a little past the ends and tick with haptics. Tap the icon to toggle auto brightness or mute.
 - **Tiles** for Wi-Fi, Bluetooth, mobile data, flashlight, airplane mode, auto-rotate, Quick Share, Eye Comfort (Night Light), power saving, dark mode, screenshot, hotspot, Do Not Disturb, location, NFC, data saver, camera access, mic access, keep screen on, extra dim, colour inversion, Wallet, alarm, timer, calculator and camera. Any app can also be added as a shortcut tile.
 - **Tile editor.** Drag to reorder, add or remove tiles, pick the two large tiles. With more than 12 tiles the grid gets extra pages you swipe through.
+- **Media players, as on Pixel.** A swipeable carousel with one card per player:
+  - the album art fills the card, and the play button is tinted from it;
+  - a wavy seek bar you can drag or tap, previous and next, and the app's own actions (such as −15 s / +30 s);
+  - an output chip that names the current device and opens Pixel's own output switcher.
+
+  The players sit at the top of the notifications and under the tiles in the control center. Media notifications don't repeat in the list.
 - **Notifications.** They are grouped and in ranking order. You can expand them, use action buttons and clear all. Swiping works as on OxygenOS:
   - **right** deletes, and a red badge shows when letting go will delete;
   - **left** opens *remind me in 1 hour*, *notification settings* and *delete*; dragging further stretches the delete button.
