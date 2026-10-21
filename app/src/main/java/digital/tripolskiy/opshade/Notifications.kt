@@ -8,6 +8,8 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.rounded.Delete
+import androidx.compose.material.icons.automirrored.rounded.Reply
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.material.icons.rounded.Snooze
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
@@ -77,7 +79,7 @@ fun NotificationCard(
     item: NotifItem,
     onOpen: (NotifItem) -> Unit,
     onDismiss: (NotifItem) -> Unit,
-    onAction: (android.app.Notification.Action) -> Unit,
+    onAction: (NotifItem, Int) -> Unit,
     onSnooze: (NotifItem) -> Unit,
     onSettings: (NotifItem) -> Unit,
     menuOpen: Boolean,
@@ -85,6 +87,9 @@ fun NotificationCard(
     modifier: Modifier = Modifier,
 ) {
     var expanded by remember(item.key) { mutableStateOf(false) }
+    // Ellipsized text also makes a card expandable, as on Pixel.
+    var overflow by remember(item.key) { mutableStateOf(false) }
+    val canExpand = item.hasMore || overflow
     val scope = rememberCoroutineScope()
     val view = LocalView.current
     val offsetX = remember(item.key) { Animatable(0f) }
@@ -199,14 +204,18 @@ fun NotificationCard(
                             )
                         }
                         Text(relTime(item.time), color = P.textSecondary, fontSize = 11.5.us, fontFamily = Op.Body, maxLines = 1)
-                        Icon(
-                            if (expanded) Icons.Rounded.KeyboardArrowUp else Icons.Rounded.KeyboardArrowDown, null,
-                            tint = P.textSecondary,
-                            modifier = Modifier.size(20.u).clip(CircleShape).clickable { expanded = !expanded },
-                        )
+                        if (canExpand || expanded) {
+                            Icon(
+                                if (expanded) Icons.Rounded.KeyboardArrowUp else Icons.Rounded.KeyboardArrowDown,
+                                if (expanded) "Collapse" else "Expand",
+                                tint = P.textSecondary,
+                                modifier = Modifier.size(20.u).clip(CircleShape).clickable { expanded = !expanded },
+                            )
+                        }
                     }
                     if (item.children.isEmpty()) {
-                        CardBody(item, expanded)
+                        CardBody(item, expanded, onOverflow = { if (it) overflow = true })
+                        if (expanded) ExpandedExtras(item)
                     } else if (!expanded) {
                         // Collapsed group: up to three "title  text" lines, newest first.
                         item.children.drop(1).take(2).forEach { c -> GroupLine(c, Modifier.padding(top = 4.u)) }
@@ -221,15 +230,21 @@ fun NotificationCard(
                     }
                     if (expanded && item.children.isEmpty() && item.actions.isNotEmpty()) {
                         Row(Modifier.padding(top = 10.u), horizontalArrangement = Arrangement.spacedBy(8.u)) {
-                            item.actions.take(3).forEach { a ->
-                                Box(
+                            item.actions.take(3).forEachIndexed { i, a ->
+                                val reply = a.remoteInputs?.any { it.allowFreeFormInput } == true
+                                Row(
                                     Modifier
                                         .clip(RoundedCornerShape(50))
-                                        .background(P.chip)
-                                        .clickable { onAction(a) }
+                                        .background(if (reply) P.active else P.chip)
+                                        .clickable { onAction(item, i) }
                                         .padding(horizontal = 14.u, vertical = 7.u),
+                                    verticalAlignment = Alignment.CenterVertically,
                                 ) {
-                                    Text(a.title?.toString().orEmpty(), color = P.text, fontSize = 13.us, fontFamily = Op.Body, maxLines = 1)
+                                    if (reply) Icon(Icons.AutoMirrored.Rounded.Reply, null, tint = P.onActive, modifier = Modifier.padding(end = 6.u).size(16.u))
+                                    Text(
+                                        a.title?.toString().orEmpty(), color = if (reply) P.onActive else P.text,
+                                        fontSize = 13.us, fontFamily = Op.Body, maxLines = 1,
+                                    )
                                 }
                             }
                         }
@@ -252,31 +267,70 @@ private fun GroupLine(c: NotifItem, modifier: Modifier = Modifier) {
 }
 
 @Composable
-private fun CardBody(item: NotifItem, expanded: Boolean) {
+private fun CardBody(item: NotifItem, expanded: Boolean, onOverflow: (Boolean) -> Unit = {}) {
     Row {
         Column(Modifier.weight(1f)) {
             if (item.title.isNotBlank()) {
                 Text(
                     item.title, color = P.text, fontSize = 14.5.us, lineHeight = 19.us, fontFamily = Op.Body,
                     fontWeight = FontWeight.Medium, maxLines = if (expanded) 3 else 1, overflow = TextOverflow.Ellipsis,
+                    onTextLayout = { if (!expanded) onOverflow(it.hasVisualOverflow) },
                     modifier = Modifier.padding(top = 4.u),
                 )
             }
+            // Messaging shows its history when expanded instead of the single latest line.
+            val showHistory = expanded && item.messages.size > 1
             val body = if (expanded) item.bigText ?: item.text else item.text
-            if (body.isNotBlank()) {
+            if (body.isNotBlank() && !showHistory) {
                 Text(
                     body, color = P.textSecondary, fontSize = 13.5.us, lineHeight = 18.us, fontFamily = Op.Body,
                     maxLines = if (expanded) 12 else 2, overflow = TextOverflow.Ellipsis,
+                    onTextLayout = { if (!expanded) onOverflow(it.hasVisualOverflow) },
                     modifier = Modifier.padding(top = 2.u),
                 )
             }
+            item.progress?.let { p ->
+                val mod = Modifier.padding(top = 8.u, bottom = 2.u).fillMaxWidth().height(4.u).clip(RoundedCornerShape(50))
+                if (p < 0f) {
+                    androidx.compose.material3.LinearProgressIndicator(mod, color = P.active, trackColor = P.chip)
+                } else {
+                    androidx.compose.material3.LinearProgressIndicator(progress = { p }, modifier = mod, color = P.active, trackColor = P.chip, drawStopIndicator = {})
+                }
+            }
         }
-        item.largeIcon?.let {
+        if (!expanded || item.picture == null) item.largeIcon?.let {
             Image(
                 it, null, contentScale = ContentScale.Crop,
                 modifier = Modifier.padding(start = 8.u, top = 6.u).size(26.u).clip(CircleShape),
             )
         }
+    }
+}
+
+/** What only shows when a card is expanded: the conversation and the big picture. */
+@Composable
+private fun ExpandedExtras(item: NotifItem) {
+    if (item.messages.size > 1) {
+        Column(Modifier.padding(top = 4.u), verticalArrangement = Arrangement.spacedBy(3.u)) {
+            item.messages.forEach { (who, body) ->
+                Row {
+                    if (who.isNotBlank()) {
+                        Text(who + "  ", color = P.text, fontSize = 13.5.us, fontFamily = Op.Body, fontWeight = FontWeight.Medium, maxLines = 1)
+                    }
+                    Text(body, color = P.textSecondary, fontSize = 13.5.us, lineHeight = 18.us, fontFamily = Op.Body, maxLines = 4, overflow = TextOverflow.Ellipsis)
+                }
+            }
+        }
+    }
+    item.picture?.let { pic ->
+        Image(
+            pic, null, contentScale = ContentScale.Crop,
+            modifier = Modifier
+                .padding(top = 10.u)
+                .fillMaxWidth()
+                .aspectRatio((pic.width.toFloat() / pic.height).coerceIn(1f, 2.2f))
+                .clip(RoundedCornerShape(12.u)),
+        )
     }
 }
 

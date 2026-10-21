@@ -357,6 +357,15 @@ class ShadeService : AccessibilityService(), TileHost {
         controller.open(1f)
     }
 
+    /** Inline reply for the notification action [index] of [key]. */
+    fun openReply(key: String, index: Int) {
+        launch(
+            Intent(this, ReplyActivity::class.java)
+                .putExtra(ReplyActivity.EXTRA_KEY, key)
+                .putExtra(ReplyActivity.EXTRA_INDEX, index),
+        )
+    }
+
     /** Pixel's own output switcher (devices, cast, volume) for one player. */
     fun openOutputSwitcher(pkg: String, token: android.media.session.MediaSession.Token) {
         allowSystemUiUntil = android.os.SystemClock.uptimeMillis() + 2000

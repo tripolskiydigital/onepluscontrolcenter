@@ -210,7 +210,11 @@ fun ShadePanel(controller: ShadeController, tiles: TileRepository, host: ShadeSe
                                 dismissed[item.key] = System.currentTimeMillis()
                                 NotifListener.instance?.dismiss(item)
                             },
-                            onAction = { a -> host.sendPendingIntent(a.actionIntent) },
+                            onAction = { item, i ->
+                                val a = item.actions.getOrNull(i)
+                                if (a?.remoteInputs?.any { it.allowFreeFormInput } == true) host.openReply(item.key, i)
+                                else host.sendPendingIntent(a?.actionIntent)
+                            },
                             onSnooze = { item ->
                                 dismissed[item.key] = System.currentTimeMillis()
                                 NotifListener.instance?.snooze(item, 60 * 60 * 1000L)

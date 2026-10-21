@@ -65,6 +65,9 @@ class SetupActivity : ComponentActivity() {
 
     private fun applyDemoExtra(i: Intent?) {
         if (i?.hasExtra("demo") == true) Demo.set(this, i.getBooleanExtra("demo", false))
+        if (i?.hasExtra("testnotifs") == true) {
+            if (i.getBooleanExtra("testnotifs", false)) TestNotifications.post(this) else TestNotifications.cancel(this)
+        }
     }
 
     override fun onResume() {

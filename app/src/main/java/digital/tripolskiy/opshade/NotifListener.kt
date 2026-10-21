@@ -33,7 +33,17 @@ data class NotifItem(
     val channelId: String? = null,
     /** Non-empty for a group: the individual notifications, newest first. */
     val children: List<NotifItem> = emptyList(),
-)
+    /** BigPictureStyle image. */
+    val picture: ImageBitmap? = null,
+    /** MessagingStyle history, oldest first: sender to text. */
+    val messages: List<Pair<String, String>> = emptyList(),
+    /** Progress bar: 0..1, or -1 for indeterminate; null when there is none. */
+    val progress: Float? = null,
+) {
+    /** Whether expanding shows more than the collapsed card (the text may also just be ellipsized). */
+    val hasMore: Boolean
+        get() = children.isNotEmpty() || bigText != null || picture != null || messages.size > 1 || actions.isNotEmpty()
+}
 
 class NotifListener : NotificationListenerService() {
 
@@ -87,7 +97,7 @@ class NotifListener : NotificationListenerService() {
         val active = try { activeNotifications } catch (_: Exception) { null } ?: return
         val order = currentRanking?.orderedKeys?.withIndex()?.associate { it.value to it.index } ?: emptyMap()
         val ranked = active
-            .filter { it.packageName != packageName }
+            .filter { it.packageName != packageName || it.notification.channelId == TestNotifications.CHANNEL }
             .sortedBy { order[it.key] ?: Int.MAX_VALUE }
 
         // Media notifications become players in the carousel, as on Pixel, and leave the list.
@@ -138,10 +148,14 @@ class NotifListener : NotificationListenerService() {
         var text = ex.getCharSequence(Notification.EXTRA_TEXT)
         @Suppress("DEPRECATION")
         val messages = ex.getParcelableArray(Notification.EXTRA_MESSAGES)
-        if (messages != null && messages.isNotEmpty()) {
-            val last = messages.last() as? Bundle
-            last?.getCharSequence("text")?.let { text = it }
+        val history = messages.orEmpty().mapNotNull { m ->
+            val b = m as? Bundle ?: return@mapNotNull null
+            val body = b.getCharSequence("text")?.toString() ?: return@mapNotNull null
+            @Suppress("DEPRECATION")
+            val who = (b.getParcelable<android.app.Person>("sender_person"))?.name ?: b.getCharSequence("sender")
+            (who?.toString() ?: "") to body
         }
+        if (history.isNotEmpty()) text = history.last().second
         val bigText = ex.getCharSequence(Notification.EXTRA_BIG_TEXT)
             ?: ex.getCharSequenceArray(Notification.EXTRA_TEXT_LINES)?.joinToString("\n")
         if (title.isNullOrBlank() && text.isNullOrBlank()) return null
@@ -167,7 +181,40 @@ class NotifListener : NotificationListenerService() {
             contentIntent = n.contentIntent,
             autoCancel = n.flags and Notification.FLAG_AUTO_CANCEL != 0,
             channelId = n.channelId,
+            picture = picture(n),
+            messages = history.takeLast(6),
+            progress = progress(ex),
         )
+    }
+
+    private fun picture(n: Notification): ImageBitmap? = try {
+        val ex = n.extras
+        val bmp = ex.getParcelable(Notification.EXTRA_PICTURE, android.graphics.Bitmap::class.java)
+            ?: ex.getParcelable(Notification.EXTRA_PICTURE_ICON, android.graphics.drawable.Icon::class.java)
+                ?.loadDrawable(this)?.let { d -> d.toBitmap(d.intrinsicWidth.coerceIn(1, 1080), d.intrinsicHeight.coerceIn(1, 1080)) }
+        bmp?.let { b ->
+            // Keep memory sane: big pictures can be full-resolution photos.
+            val f = (720f / maxOf(b.width, b.height)).coerceAtMost(1f)
+            android.graphics.Bitmap.createScaledBitmap(b, (b.width * f).toInt().coerceAtLeast(1), (b.height * f).toInt().coerceAtLeast(1), true).asImageBitmap()
+        }
+    } catch (_: Exception) {
+        null
+    }
+
+    private fun progress(ex: Bundle): Float? {
+        val max = ex.getInt(Notification.EXTRA_PROGRESS_MAX, 0)
+        val indeterminate = ex.getBoolean(Notification.EXTRA_PROGRESS_INDETERMINATE, false)
+        return when {
+            indeterminate -> -1f
+            max > 0 -> (ex.getInt(Notification.EXTRA_PROGRESS, 0).toFloat() / max).coerceIn(0f, 1f)
+            else -> null
+        }
+    }
+
+    /** The action [index] of the notification [key] (searched in groups too), for inline reply. */
+    fun action(key: String, index: Int): Notification.Action? {
+        val all = _items.value.flatMap { listOf(it) + it.children }
+        return all.firstOrNull { it.key == key }?.actions?.getOrNull(index)
     }
 
     private fun mediaToken(sbn: StatusBarNotification): MediaSession.Token? = try {

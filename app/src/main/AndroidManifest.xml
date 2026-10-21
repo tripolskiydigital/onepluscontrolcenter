@@ -12,6 +12,8 @@
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
     <uses-permission android:name="android.permission.VIBRATE" />
+    <!-- Only for the sample notifications used to test the cards (TestNotifications). -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" tools:ignore="QueryAllPackagesPermission" />
 
     <application
@@ -37,6 +39,18 @@
             android:exported="false"
             android:excludeFromRecents="true"
             android:label="Edit tiles" />
+
+        <activity
+            android:name=".ReplyActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:taskAffinity=""
+            android:theme="@android:style/Theme.Translucent.NoTitleBar"
+            android:windowSoftInputMode="adjustResize|stateAlwaysVisible" />
+
+        <receiver
+            android:name=".TestReceiver"
+            android:exported="false" />
 
         <service
             android:name=".ShadeService"
