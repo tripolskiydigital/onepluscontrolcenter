@@ -39,7 +39,7 @@ The OxygenOS 16 notification shade and control center, rebuilt for Google Pixel.
   - an output chip that names the current device and opens Pixel's own output switcher.
 
   The players sit at the top of the notifications and under the tiles in the control center. Media notifications don't repeat in the list.
-- **Notifications.** They are grouped and in ranking order. You can expand them, use action buttons and clear all. Swiping works as on OxygenOS:
+- **Notifications.** They are grouped and in ranking order. The expand arrow shows only when there is more to see. Expanding reveals the full text, the conversation, big pictures and action buttons, also for each notification inside a group. **Reply** opens a reply panel with the keyboard. Progress bars show in every state. Clear all removes everything. Swiping works as on OxygenOS:
   - **right** deletes, and a red badge shows when letting go will delete;
   - **left** opens *remind me in 1 hour*, *notification settings* and *delete*; dragging further stretches the delete button.
 - **Pixel colours.** Everything uses Material You colours (wallpaper colours, light and dark), mapped to the same roles Pixel's own shade uses.
@@ -90,6 +90,7 @@ Shizuku stops when the phone restarts, so start it again after each reboot.
 - **Smoothness.** Animated values are read only inside `offset {}`, `layout {}` and `graphicsLayer {}` lambdas, so a frame never recomposes. The window votes for the panel's top refresh rate, because Pixel's adaptive refresh rate otherwise caps the "high" category at 90 Hz.
   - On the release build, about 1% of frames are late and every frame lands 8.3 ms apart (120 Hz). Check with `adb shell dumpsys gfxinfo digital.tripolskiy.opshade`.
   - Debug builds of Compose are several times slower, so judge smoothness only on release builds.
+- **Sample notifications** for checking cards: a chat with Reply, a picture, a download and long text with buttons. Turn them on with `adb shell am start -n digital.tripolskiy.opshade/.SetupActivity --ez testnotifs true`, and pass `false` to remove them. Their buttons only reach the app itself.
 - **Screenshot mode** shows sample notifications and neutral Wi-Fi and carrier names:
   ```bash
   adb shell am start -n digital.tripolskiy.opshade/.SetupActivity --ez demo true

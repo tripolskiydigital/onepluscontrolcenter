@@ -220,35 +220,12 @@ fun NotificationCard(
                         // Collapsed group: up to three "title  text" lines, newest first.
                         item.children.drop(1).take(2).forEach { c -> GroupLine(c, Modifier.padding(top = 4.u)) }
                     } else {
-                        Column(verticalArrangement = Arrangement.spacedBy(8.u), modifier = Modifier.padding(top = 6.u)) {
-                            item.children.forEach { c ->
-                                Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.u)).clickable { onOpen(c) }) {
-                                    CardBody(c, false)
-                                }
-                            }
+                        // Expanded group: every notification is its own row that can expand and has its buttons.
+                        Column(verticalArrangement = Arrangement.spacedBy(10.u), modifier = Modifier.padding(top = 6.u)) {
+                            item.children.forEach { c -> ChildRow(c, onOpen, onAction) }
                         }
                     }
-                    if (expanded && item.children.isEmpty() && item.actions.isNotEmpty()) {
-                        Row(Modifier.padding(top = 10.u), horizontalArrangement = Arrangement.spacedBy(8.u)) {
-                            item.actions.take(3).forEachIndexed { i, a ->
-                                val reply = a.remoteInputs?.any { it.allowFreeFormInput } == true
-                                Row(
-                                    Modifier
-                                        .clip(RoundedCornerShape(50))
-                                        .background(if (reply) P.active else P.chip)
-                                        .clickable { onAction(item, i) }
-                                        .padding(horizontal = 14.u, vertical = 7.u),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                ) {
-                                    if (reply) Icon(Icons.AutoMirrored.Rounded.Reply, null, tint = P.onActive, modifier = Modifier.padding(end = 6.u).size(16.u))
-                                    Text(
-                                        a.title?.toString().orEmpty(), color = if (reply) P.onActive else P.text,
-                                        fontSize = 13.us, fontFamily = Op.Body, maxLines = 1,
-                                    )
-                                }
-                            }
-                        }
-                    }
+                    if (expanded && item.children.isEmpty()) ActionRow(item, onAction)
                 }
             }
         }
@@ -303,6 +280,60 @@ private fun CardBody(item: NotifItem, expanded: Boolean, onOverflow: (Boolean) -
                 it, null, contentScale = ContentScale.Crop,
                 modifier = Modifier.padding(start = 8.u, top = 6.u).size(26.u).clip(CircleShape),
             )
+        }
+    }
+}
+
+/** One notification inside an expanded group, with its own expand arrow and buttons. */
+@Composable
+private fun ChildRow(c: NotifItem, onOpen: (NotifItem) -> Unit, onAction: (NotifItem, Int) -> Unit) {
+    var expanded by remember(c.key) { mutableStateOf(false) }
+    var overflow by remember(c.key) { mutableStateOf(false) }
+    Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.u)).clickable { onOpen(c) }) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                c.header, Modifier.weight(1f), color = P.textSecondary, fontSize = 11.5.us,
+                fontFamily = Op.Body, maxLines = 1, overflow = TextOverflow.Ellipsis,
+            )
+            Text(relTime(c.time), color = P.textSecondary, fontSize = 11.5.us, fontFamily = Op.Body, maxLines = 1)
+            if (c.hasMore || overflow || expanded) {
+                Icon(
+                    if (expanded) Icons.Rounded.KeyboardArrowUp else Icons.Rounded.KeyboardArrowDown,
+                    if (expanded) "Collapse" else "Expand",
+                    tint = P.textSecondary,
+                    modifier = Modifier.size(20.u).clip(CircleShape).clickable { expanded = !expanded },
+                )
+            }
+        }
+        CardBody(c, expanded, onOverflow = { if (it) overflow = true })
+        if (expanded) {
+            ExpandedExtras(c)
+            ActionRow(c, onAction)
+        }
+    }
+}
+
+/** Notification buttons; a button with free-form input (Reply) is highlighted and opens the reply panel. */
+@Composable
+private fun ActionRow(item: NotifItem, onAction: (NotifItem, Int) -> Unit) {
+    if (item.actions.isEmpty()) return
+    Row(Modifier.padding(top = 10.u), horizontalArrangement = Arrangement.spacedBy(8.u)) {
+        item.actions.take(3).forEachIndexed { i, a ->
+            val reply = a.remoteInputs?.any { it.allowFreeFormInput } == true
+            Row(
+                Modifier
+                    .clip(RoundedCornerShape(50))
+                    .background(if (reply) P.active else P.chip)
+                    .clickable { onAction(item, i) }
+                    .padding(horizontal = 14.u, vertical = 7.u),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                if (reply) Icon(Icons.AutoMirrored.Rounded.Reply, null, tint = P.onActive, modifier = Modifier.padding(end = 6.u).size(16.u))
+                Text(
+                    a.title?.toString().orEmpty(), color = if (reply) P.onActive else P.text,
+                    fontSize = 13.us, fontFamily = Op.Body, maxLines = 1,
+                )
+            }
         }
     }
 }

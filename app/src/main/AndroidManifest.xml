@@ -25,9 +25,11 @@
         <!-- Lets dumpsys gfxinfo measure frame times on release builds. -->
         <profileable android:shell="true" />
 
+        <!-- singleTop: adb commands (demo, testnotifs) reach a running instance through onNewIntent. -->
         <activity
             android:name=".SetupActivity"
-            android:exported="true">
+            android:exported="true"
+            android:launchMode="singleTop">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
