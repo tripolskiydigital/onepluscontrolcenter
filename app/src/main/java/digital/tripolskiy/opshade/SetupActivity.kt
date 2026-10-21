@@ -49,11 +49,22 @@ class SetupActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        if (intent.hasExtra("demo")) Demo.set(this, intent.getBooleanExtra("demo", false))
+        applyDemoExtra(intent)
         try { Shizuku.addRequestPermissionResultListener(shizukuListener) } catch (_: Throwable) {}
         setContent {
             androidx.compose.runtime.CompositionLocalProvider(LocalPalette provides ShadePalette.from(this)) { Screen(tick) }
         }
+    }
+
+    // The setup screen is often already on top when the command arrives; handle it here too.
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        applyDemoExtra(intent)
+        tick++
+    }
+
+    private fun applyDemoExtra(i: Intent?) {
+        if (i?.hasExtra("demo") == true) Demo.set(this, i.getBooleanExtra("demo", false))
     }
 
     override fun onResume() {
@@ -128,6 +139,12 @@ class SetupActivity : ComponentActivity() {
                 Shell.available(),
             ) { if (shizuku) Shell.requestPermission() else open(Settings.ACTION_SETTINGS) }
 
+            if (Demo.enabled(ctx)) {
+                // Shown only while it's on, so sample notifications can't be left on by accident.
+                Item("Screenshot mode is on", "The shade shows sample notifications and neutral names. Tap to turn it off.", false) {
+                    Demo.set(ctx, false); this@SetupActivity.tick++
+                }
+            }
             Spacer(Modifier.height(8.dp))
             Text(
                 "Edit tiles", color = P.text, fontSize = 16.sp,
