@@ -357,8 +357,8 @@ class ShadeService : AccessibilityService(), TileHost {
 
     // endregion
 
-    fun sendPendingIntent(pi: PendingIntent?) {
-        controller.close()
+    fun sendPendingIntent(pi: PendingIntent?, closeShade: Boolean = true) {
+        if (closeShade) controller.close()
         pi ?: return
         val options = ActivityOptions.makeBasic()
         if (Build.VERSION.SDK_INT >= 34) {

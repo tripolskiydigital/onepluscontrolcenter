@@ -92,6 +92,10 @@ import androidx.compose.ui.draw.drawBehind
 import kotlinx.coroutines.launch
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -105,11 +109,13 @@ private fun frac(v: Float, start: Float, end: Float) = ((v - start) / (end - sta
  * never recomposes the panel. That is what keeps it at 120 Hz.
  */
 @Stable
-private class Progress(private val controller: ShadeController, val px: Float) {
+private class Progress(private val controller: ShadeController, val px: Float, val landscape: Boolean) {
     /** 0..1: closed to notification stage. */
     fun open() = controller.expansion.value.coerceIn(0f, 1f)
-    /** 0..1: notification stage to full control center. */
-    fun q() = (controller.expansion.value - 1f).coerceIn(0f, 1f)
+    /** 0..1: notification stage to full control center. Landscape always shows the full control center. */
+    fun q() = if (landscape) 1f else (controller.expansion.value - 1f).coerceIn(0f, 1f)
+    /** How far the notification list has given way to the control center (never in landscape). */
+    fun listQ() = if (landscape) 0f else q()
     fun offset(x: Float, y: Float) = IntOffset((x * px).roundToInt(), (y * px).roundToInt())
     /** Content slides down 36dp while it fades in during the first pull. */
     fun shift() = -(1f - open()) * 36f * px
@@ -144,15 +150,17 @@ fun ShadePanel(controller: ShadeController, tiles: TileRepository, host: ShadeSe
             dismissed.entries.filter { now - it.value >= 2000 }.map { it.key }.forEach { dismissed.remove(it) }
         }
     }
-    val showList by remember(controller) { derivedStateOf { controller.expansion.value < 1.98f } }
-    val listScrolls by remember(controller) { derivedStateOf { controller.expansion.value < 1.5f } }
-    val showClearAll by remember(controller) { derivedStateOf { controller.expansion.value < 1.99f } }
-
     BoxWithConstraints(Modifier.fillMaxSize()) {
-        val unit = maxWidth.value / 360f
+        // Scale from the short side, so turning the phone doesn't blow the shade up.
+        val unit = minOf(maxWidth.value, maxHeight.value) / 360f
+        // Landscape: tiles in a scrolling column on the left, players and notifications on the right.
+        val landscape = maxWidth > maxHeight
+        val showList by remember(controller, landscape) { derivedStateOf { landscape || controller.expansion.value < 1.98f } }
+        val listScrolls by remember(controller, landscape) { derivedStateOf { landscape || controller.expansion.value < 1.5f } }
         CompositionLocalProvider(LocalUnit provides unit, LocalPalette provides palette) {
             val pxPerU = with(LocalDensity.current) { 1.u.toPx() }
-            val p = remember(controller, pxPerU) { Progress(controller, pxPerU) }
+            val p = remember(controller, pxPerU, landscape) { Progress(controller, pxPerU, landscape) }
+            val maxStage = if (landscape) 1f else 2f
             val scrimAlpha = if (blurEnabled) 0.84f else 0.97f
 
             // Scrim: blurred backdrop plus a tint, both ramped in over the first part of the pull.
@@ -166,15 +174,15 @@ fun ShadePanel(controller: ShadeController, tiles: TileRepository, host: ShadeSe
             )
 
             // Notifications (behind the tiles, so the control center can slide over them).
-            val nested = remember(controller) { shadeNestedScroll(controller) }
+            val nested = remember(controller, maxStage) { shadeNestedScroll(controller, maxStage) }
             if (showList) Box(
                 Modifier
                     .fillMaxSize()
-                    .padding(top = 334.u)
-                    .panelDrag(controller)
+                    .padding(start = if (landscape) 368.u else 0.u, top = if (landscape) 24.u else 334.u)
+                    .panelDrag(controller, maxStage)
                     .tapToClose(controller)
                     .graphicsLayer {
-                        val q = p.q()
+                        val q = p.listQ()
                         alpha = frac(p.open(), 0.3f, 1f) * (1f - frac(q, 0f, 0.6f))
                         translationY = p.shift() * 2f + q * 220f * p.px
                     },
@@ -186,11 +194,15 @@ fun ShadePanel(controller: ShadeController, tiles: TileRepository, host: ShadeSe
                 // The list stays composed while the shade is closed, and new notifications arrive
                 // above the anchored item; start every opening at the top, with menus folded.
                 val closed by remember(controller) { derivedStateOf { controller.expansion.value == 0f } }
-                LaunchedEffect(closed) { if (closed) { menuKey = null; listState.scrollToItem(0) } }
+                // Also on opening: a player can be inserted above the anchored first card meanwhile.
+                LaunchedEffect(closed) { menuKey = null; listState.scrollToItem(0) }
                 LazyColumn(
                     Modifier.fillMaxSize().nestedScroll(nested),
                     state = listState,
-                    contentPadding = PaddingValues(start = 16.u, end = 16.u, bottom = 140.u),
+                    contentPadding = PaddingValues(
+                        start = 16.u, end = 16.u,
+                        bottom = 24.u + WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding(),
+                    ),
                     userScrollEnabled = listScrolls,
                 ) {
                     if (media.isNotEmpty()) {
@@ -213,7 +225,8 @@ fun ShadePanel(controller: ShadeController, tiles: TileRepository, host: ShadeSe
                             onAction = { item, i ->
                                 val a = item.actions.getOrNull(i)
                                 if (a?.remoteInputs?.any { it.allowFreeFormInput } == true) host.openReply(item.key, i)
-                                else host.sendPendingIntent(a?.actionIntent)
+                                // Buttons that open an app close the shade; others (Archive, Mark as read) keep it open.
+                                else host.sendPendingIntent(a?.actionIntent, closeShade = a?.actionIntent?.isActivity == true)
                             },
                             onSnooze = { item ->
                                 dismissed[item.key] = System.currentTimeMillis()
@@ -235,11 +248,38 @@ fun ShadePanel(controller: ShadeController, tiles: TileRepository, host: ShadeSe
                             modifier = Modifier.padding(bottom = 8.u).animateItem(),
                         )
                     }
+                    // Clear all sits after the last card, as on Pixel, instead of floating over the list.
+                    if (visibleNotifs.any { it.clearable }) {
+                        item(key = "clear_all") {
+                            Box(Modifier.fillMaxWidth().padding(top = 8.u).animateItem(), contentAlignment = Alignment.Center) {
+                                Box(
+                                    Modifier
+                                        .size(48.u)
+                                        .clip(CircleShape)
+                                        .background(palette.clearAll)
+                                        .clickable {
+                                            NotifListener.instance?.dismissAll()
+                                            controller.close()
+                                        },
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    Icon(Icons.Rounded.Close, "Clear all", tint = palette.text, modifier = Modifier.size(26.u))
+                                }
+                            }
+                        }
+                    }
                 }
             }
 
             // Everything above the notifications. It is only as tall as the tiles so the list below
-            // keeps its touches; drags that start on a tile still move the panel.
+            // keeps its touches; drags that start on a tile still move the panel. In landscape it is
+            // a column on the left that scrolls when it doesn't fit.
+            val leftScroll = rememberScrollState()
+            val nestedLeft = remember(controller) { shadeNestedScroll(controller, 1f) }
+            Box(
+                if (landscape) Modifier.width(360.u).fillMaxHeight().nestedScroll(nestedLeft).verticalScroll(leftScroll)
+                else Modifier,
+            ) {
             Box(
                 Modifier
                     .fillMaxWidth()
@@ -248,7 +288,7 @@ fun ShadePanel(controller: ShadeController, tiles: TileRepository, host: ShadeSe
                         val pl = m.measure(c.copy(minHeight = h, maxHeight = h))
                         layout(pl.width, h) { pl.place(0, 0) }
                     }
-                    .panelDrag(controller)
+                    .then(if (landscape) Modifier else Modifier.panelDrag(controller))
                     .tapToClose(controller)
                     .graphicsLayer { alpha = frac(p.open(), 0.1f, 0.6f); translationY = p.shift() },
             ) {
@@ -263,7 +303,7 @@ fun ShadePanel(controller: ShadeController, tiles: TileRepository, host: ShadeSe
                 IconButton(Icons.Outlined.Settings, { p.offset(lerp(300f, 252f, p.q()), lerp(32f, 64f, p.q())) }) {
                     host.launch(Intent(Settings.ACTION_SETTINGS))
                 }
-                val moreVisible by remember(controller) { derivedStateOf { controller.expansion.value > 1.01f } }
+                val moreVisible by remember(controller, landscape) { derivedStateOf { landscape || controller.expansion.value > 1.01f } }
                 if (moreVisible) {
                     Box(Modifier.graphicsLayer { alpha = p.q() }) {
                         IconButton(Icons.Rounded.MoreVert, { p.offset(300f, 64f) }) {
@@ -289,9 +329,10 @@ fun ShadePanel(controller: ShadeController, tiles: TileRepository, host: ShadeSe
                         .graphicsLayer { alpha = 1f - frac(p.q(), 0f, 0.4f) },
                 )
             }
+            }
 
             // In the control center the players sit under the tile grid, as in Pixel's QS.
-            if (showCcMedia && media.isNotEmpty()) {
+            if (showCcMedia && media.isNotEmpty() && !landscape) {
                 MediaCarousel(
                     media, host,
                     Modifier
@@ -301,26 +342,6 @@ fun ShadePanel(controller: ShadeController, tiles: TileRepository, host: ShadeSe
                 )
             }
 
-            // Clear all.
-            if (showClearAll && (visibleNotifs.any { it.clearable })) {
-                Box(
-                    Modifier
-                        .align(Alignment.BottomCenter)
-                        .windowInsetsPadding(WindowInsets.navigationBars)
-                        .padding(bottom = 24.u)
-                        .graphicsLayer { alpha = frac(p.open(), 0.5f, 1f) * (1f - frac(p.q(), 0f, 0.3f)) }
-                        .size(48.u)
-                        .clip(CircleShape)
-                        .background(palette.clearAll)
-                        .clickable {
-                            NotifListener.instance?.dismissAll()
-                            controller.close()
-                        },
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Icon(Icons.Rounded.Close, null, tint = palette.text, modifier = Modifier.size(26.u))
-                }
-            }
         }
     }
 }
@@ -335,7 +356,7 @@ private fun Modifier.tapToClose(controller: ShadeController) = pointerInput(cont
 }
 
 /** Vertical drags anywhere on the panel that no child claims: pull down expands, push up collapses. */
-private fun Modifier.panelDrag(controller: ShadeController) = pointerInput(controller) {
+private fun Modifier.panelDrag(controller: ShadeController, maxStage: Float = 2f) = pointerInput(controller, maxStage) {
     awaitEachGesture {
         val down = awaitFirstDown(requireUnconsumed = false)
         val tracker = VelocityTracker()
@@ -343,16 +364,16 @@ private fun Modifier.panelDrag(controller: ShadeController) = pointerInput(contr
         var started = false
         val slopChange = awaitVerticalTouchSlopOrCancellation(down.id) { change, over ->
             change.consume()
-            controller.dragBy(over)
+            controller.dragBy(over, maxStage)
             started = true
         }
         if (slopChange != null || started) {
             verticalDrag(slopChange?.id ?: down.id) { change ->
                 tracker.addPosition(change.uptimeMillis, change.position)
-                controller.dragBy(change.position.y - change.previousPosition.y)
+                controller.dragBy(change.position.y - change.previousPosition.y, maxStage)
                 change.consume()
             }
-            controller.settle(tracker.calculateVelocity().y)
+            controller.settle(tracker.calculateVelocity().y, maxStage)
         }
     }
 }
@@ -360,9 +381,12 @@ private fun Modifier.panelDrag(controller: ShadeController) = pointerInput(contr
 /**
  * Lets the notification list hand over to the panel: pulling down at the top of the list
  * expands to the control center, pushing up when the list can't scroll closes the shade.
+ * Only a gesture that starts at the list's edge moves the panel: if this gesture scrolled the
+ * list, reaching the end stops there instead of carrying on into closing the shade.
  */
-private fun shadeNestedScroll(controller: ShadeController) = object : NestedScrollConnection {
+private fun shadeNestedScroll(controller: ShadeController, maxStage: Float) = object : NestedScrollConnection {
     private var draggingPanel = false
+    private var scrolledList = false
 
     override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
         if (source != NestedScrollSource.UserInput) return Offset.Zero
@@ -370,23 +394,26 @@ private fun shadeNestedScroll(controller: ShadeController) = object : NestedScro
         // While the panel is between stages, it keeps the gesture.
         if (draggingPanel || (e > 1.001f && available.y < 0) || (e < 0.999f)) {
             draggingPanel = true
-            controller.dragBy(available.y)
+            controller.dragBy(available.y, maxStage)
             return available
         }
         return Offset.Zero
     }
 
     override fun onPostScroll(consumed: Offset, available: Offset, source: NestedScrollSource): Offset {
-        if (source != NestedScrollSource.UserInput || available.y == 0f) return Offset.Zero
+        if (source != NestedScrollSource.UserInput) return Offset.Zero
+        if (consumed.y != 0f) scrolledList = true
+        if (available.y == 0f || scrolledList) return Offset.Zero
         draggingPanel = true
-        controller.dragBy(available.y)
+        controller.dragBy(available.y, maxStage)
         return available
     }
 
     override suspend fun onPreFling(available: Velocity): Velocity {
+        scrolledList = false
         if (draggingPanel) {
             draggingPanel = false
-            controller.settle(available.y)
+            controller.settle(available.y, maxStage)
             return available
         }
         return Velocity.Zero
@@ -530,7 +557,7 @@ private fun TileGrid(
     val pages = ((grid.size + PAGE - 1) / PAGE).coerceAtLeast(1)
     val page = remember { Animatable(0f) }
     val scope = rememberCoroutineScope()
-    val atFullStage by remember(controller) { derivedStateOf { controller.expansion.value > 1.99f } }
+    val atFullStage by remember(controller, p) { derivedStateOf { p.q() > 0.99f } }
     // Back to the first page whenever the control center folds up, so the quick row shows page 1.
     LaunchedEffect(atFullStage) { if (!atFullStage) page.snapTo(0f) }
     LaunchedEffect(pages) { if (page.value > pages - 1) page.snapTo((pages - 1).toFloat()) }
@@ -549,7 +576,7 @@ private fun TileGrid(
             .pointerInput(pages) {
                 awaitEachGesture {
                     val down = awaitFirstDown(requireUnconsumed = false)
-                    if (pages <= 1 || controller.expansion.value < 1.99f) return@awaitEachGesture
+                    if (pages <= 1 || p.q() < 0.99f) return@awaitEachGesture
                     val tracker = VelocityTracker()
                     var drag = awaitHorizontalTouchSlopOrCancellation(down.id) { ch, over ->
                         ch.consume()
@@ -589,8 +616,8 @@ private fun TileGrid(
                 }
             }
             // Hidden tiles must not take taps meant for the notifications underneath.
-            val interactive by remember(controller, i) {
-                derivedStateOf { alphaOf((controller.expansion.value - 1f).coerceIn(0f, 1f)) > 0.5f }
+            val interactive by remember(controller, i, p) {
+                derivedStateOf { alphaOf(p.q()) > 0.5f }
             }
             val pageShift = { (onPage - page.value) * widthU }
             Box(
