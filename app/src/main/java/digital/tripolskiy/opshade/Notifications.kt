@@ -72,7 +72,8 @@ private fun relTime(t: Long): String =
  *   would delete (60% of the width, OplusSwipeHelper's far-enough fraction);
  * - left: the card snaps open on a row of round buttons (remind me, notification settings,
  *   delete); dragging on past the threshold stretches the delete button and releasing deletes.
- * Ongoing notifications can still open the menu but have no delete.
+ * Ongoing notifications can still open the menu, but have delete only when the app gave them a
+ * delete intent (a timer that stops when swiped).
  */
 @Composable
 fun NotificationCard(
@@ -95,7 +96,7 @@ fun NotificationCard(
     val offsetX = remember(item.key) { Animatable(0f) }
     var width by remember { mutableIntStateOf(1) }
     val density = LocalDensity.current
-    val buttons = if (item.clearable) 3 else 2
+    val buttons = if (item.dismissable) 3 else 2
     // OxygenOS: icon slots plus margins, 52dp circles with 10dp gaps and 4dp extra.
     val menuWidth = with(density) { (buttons * (52 + 10) + 4).u.toPx() }
     val dismissAt = { width * 0.6f }
@@ -118,7 +119,7 @@ fun NotificationCard(
             width = { width.toFloat() },
             menuWidth = menuWidth,
             dismissAt = dismissAt,
-            clearable = item.clearable,
+            dismissable = item.dismissable,
             onSnooze = { onMenuOpenChange(false); onSnooze(item) },
             onSettings = { onMenuOpenChange(false); onSettings(item) },
             onDelete = { onMenuOpenChange(false); dismiss(-1) },
@@ -132,10 +133,10 @@ fun NotificationCard(
                     orientation = Orientation.Horizontal,
                     state = rememberDraggableState { d ->
                         var next = offsetX.value + d
-                        // Ongoing notifications can't be dismissed: resist going right.
-                        if (!item.clearable && next > 0f) next = offsetX.value + d * 0.2f
-                        if (!item.clearable && next < -menuWidth) next = offsetX.value + d * 0.2f
-                        val past = item.clearable && kotlin.math.abs(next) > dismissAt()
+                        // Cards that can't be dismissed resist going right.
+                        if (!item.dismissable && next > 0f) next = offsetX.value + d * 0.2f
+                        if (!item.dismissable && next < -menuWidth) next = offsetX.value + d * 0.2f
+                        val past = item.dismissable && kotlin.math.abs(next) > dismissAt()
                         if (past != pastThreshold) {
                             pastThreshold = past
                             view.performHapticFeedback(android.view.HapticFeedbackConstants.SEGMENT_FREQUENT_TICK)
@@ -148,8 +149,8 @@ fun NotificationCard(
                     onDragStopped = { v ->
                         val x = offsetX.value
                         when {
-                            item.clearable && (x > dismissAt() || (x > width * 0.2f && v > 2500f)) -> dismiss(1)
-                            item.clearable && (x < -dismissAt() || (x < -menuWidth && v < -3000f)) -> dismiss(-1)
+                            item.dismissable && (x > dismissAt() || (x > width * 0.2f && v > 2500f)) -> dismiss(1)
+                            item.dismissable && (x < -dismissAt() || (x < -menuWidth && v < -3000f)) -> dismiss(-1)
                             x < 0f && (x < -menuWidth / 2f || v < -800f) && v < 800f -> {
                                 onMenuOpenChange(true)
                                 offsetX.animateTo(-menuWidth, spring)
@@ -385,21 +386,21 @@ private fun SwipeBackdrop(
     width: () -> Float,
     menuWidth: Float,
     dismissAt: () -> Float,
-    clearable: Boolean,
+    dismissable: Boolean,
     onSnooze: () -> Unit,
     onSettings: () -> Unit,
     onDelete: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val rightPast by remember { derivedStateOf { clearable && offset() > dismissAt() } }
-    val leftPast by remember { derivedStateOf { clearable && -offset() > dismissAt() } }
+    val rightPast by remember { derivedStateOf { dismissable && offset() > dismissAt() } }
+    val leftPast by remember { derivedStateOf { dismissable && -offset() > dismissAt() } }
     val button = 52.u
     val buttonPx = with(LocalDensity.current) { button.toPx() }
     val gapPx = with(LocalDensity.current) { 8.u.toPx() }
     val reveal = { (-offset() / menuWidth).coerceIn(0f, 1f) }
 
     Box(modifier) {
-        if (clearable) {
+        if (dismissable) {
             // Right swipe: the delete badge grows with the drag and turns red once releasing deletes.
             Box(
                 Modifier
@@ -428,7 +429,7 @@ private fun SwipeBackdrop(
         ) {
             MenuButton(Icons.Rounded.Snooze, "Remind me in 1 hour", reveal, hidden = leftPast, onClick = onSnooze)
             MenuButton(Icons.Outlined.Settings, "Notification settings", reveal, hidden = leftPast, onClick = onSettings)
-            if (clearable) {
+            if (dismissable) {
                 // Past the threshold the delete button stretches over the uncovered space.
                 Box(
                     Modifier

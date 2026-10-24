@@ -42,6 +42,7 @@ The OxygenOS 16 notification shade and control center, rebuilt for Google Pixel.
 - **Notifications.** They are grouped and in ranking order. The expand arrow shows only when there is more to see. Expanding reveals the full text, the conversation, big pictures and action buttons, also for each notification inside a group. **Reply** opens a reply panel with the keyboard. Progress bars show in every state. Clear all removes everything. Swiping works as on OxygenOS:
   - **right** deletes, and a red badge shows when letting go will delete;
   - **left** opens *remind me in 1 hour*, *notification settings* and *delete*; dragging further stretches the delete button.
+  - ongoing cards (a running timer) can be deleted only when the app gave them a delete intent; deleting sends it, as Pixel's shade does, so the timer stops. Other ongoing cards don't swipe away.
 - **Pixel colours.** Everything uses Material You colours (wallpaper colours, light and dark), mapped to the same roles Pixel's own shade uses.
 - **120 Hz.** Animations never recompose, and the shade window asks for the panel's full refresh rate.
 

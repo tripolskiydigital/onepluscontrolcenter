@@ -30,6 +30,8 @@ data class NotifItem(
     val actions: List<Notification.Action>,
     val contentIntent: PendingIntent?,
     val autoCancel: Boolean,
+    /** Sent by us when an ongoing card is swiped away, e.g. stops a running timer. */
+    val deleteIntent: PendingIntent? = null,
     val channelId: String? = null,
     /** Non-empty for a group: the individual notifications, newest first. */
     val children: List<NotifItem> = emptyList(),
@@ -40,6 +42,13 @@ data class NotifItem(
     /** Progress bar: 0..1, or -1 for indeterminate; null when there is none. */
     val progress: Float? = null,
 ) {
+    /**
+     * Whether swiping the card away does something: the system cancels it, or, for an ongoing one
+     * the system won't cancel, the app gets its delete intent (a Clocks timer stops).
+     */
+    val dismissable: Boolean
+        get() = clearable || deleteIntent != null || children.any { it.dismissable }
+
     /** Whether expanding shows more than the collapsed card (the text may also just be ellipsized). */
     val hasMore: Boolean
         get() = children.isNotEmpty() || bigText != null || picture != null || messages.size > 1 || actions.isNotEmpty()
@@ -77,8 +86,21 @@ class NotifListener : NotificationListenerService() {
     override fun onNotificationRankingUpdate(rankingMap: RankingMap?) = rebuild()
 
     fun dismiss(item: NotifItem) {
-        if (item.children.isEmpty()) cancelNotification(item.key)
-        else (item.children.map { it.key } + item.key).forEach { cancelNotification(it) }
+        if (item.children.isEmpty()) dismissOne(item)
+        else {
+            item.children.forEach(::dismissOne)
+            cancelNotification(item.key)
+        }
+    }
+
+    /**
+     * The system ignores cancels of ongoing notifications from a listener, and only sends the delete
+     * intent for ones it cancels itself. So for an ongoing card send it ourselves, as Pixel's shade
+     * does when such a card is swiped.
+     */
+    private fun dismissOne(item: NotifItem) {
+        if (item.clearable) cancelNotification(item.key)
+        else try { item.deleteIntent?.send() } catch (_: Exception) {}
     }
 
     fun dismissAll() = cancelAllNotifications()
@@ -198,6 +220,7 @@ class NotifListener : NotificationListenerService() {
             actions = n.actions?.toList().orEmpty(),
             contentIntent = n.contentIntent,
             autoCancel = n.flags and Notification.FLAG_AUTO_CANCEL != 0,
+            deleteIntent = n.deleteIntent,
             channelId = n.channelId,
             picture = picture(n),
             messages = history.takeLast(6),
