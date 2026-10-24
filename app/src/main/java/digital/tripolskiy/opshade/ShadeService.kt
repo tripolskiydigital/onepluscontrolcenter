@@ -197,6 +197,8 @@ class ShadeService : AccessibilityService(), TileHost {
         catcherParams = baseParams(statusBarHeight(), WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE)
             .apply { title = "OpShadeCatcher" }
         val slop = ViewConfiguration.get(this).scaledTouchSlop
+        val tapTimeout = ViewConfiguration.getLongPressTimeout()
+        var downX = 0f
         var downY = 0f
         var lastY = 0f
         var dragging = false
@@ -206,7 +208,7 @@ class ShadeService : AccessibilityService(), TileHost {
         catcher.setOnTouchListener { _, e ->
             when (e.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
-                    downY = e.rawY; lastY = e.rawY; dragging = false; twoFinger = false
+                    downX = e.rawX; downY = e.rawY; lastY = e.rawY; dragging = false; twoFinger = false
                     tracker?.recycle(); tracker = VelocityTracker.obtain()
                     tracker?.addMovement(e)
                     tiles.refresh()
@@ -231,6 +233,7 @@ class ShadeService : AccessibilityService(), TileHost {
                     val vy = tracker?.yVelocity ?: 0f
                     tracker?.recycle(); tracker = null
                     if (dragging) controller.settle(vy, maxStage = if (twoFinger) 2f else 1f)
+                    else if (!twoFinger && e.eventTime - e.downTime < tapTimeout && abs(e.rawX - downX) < slop) onStatusBarTap(downX)
                     dragging = false
                 }
                 MotionEvent.ACTION_CANCEL -> {
@@ -245,6 +248,20 @@ class ShadeService : AccessibilityService(), TileHost {
             true
         }
         wm.addView(catcher, catcherParams)
+    }
+
+    /**
+     * The catcher covers the status bar, so SystemUI never sees taps on its Live Update chips.
+     * A tap left of the camera cutout, where the chips sit after the clock, opens the promoted
+     * notification the way the chip would.
+     */
+    private fun onStatusBarTap(x: Float) {
+        val cutout = wm.currentWindowMetrics.windowInsets.displayCutout?.boundingRectTop
+        val chipsEnd = if (cutout != null && !cutout.isEmpty) cutout.left else wm.currentWindowMetrics.bounds.width() / 2
+        if (x >= chipsEnd) return
+        val pi = NotifListener.instance?.promotedContentIntent() ?: return
+        android.util.Log.d("OpShade", "status bar tap at x=$x: opening Live Update ${pi.creatorPackage}")
+        sendPendingIntent(pi, closeShade = false)
     }
 
     private fun addShadeWindow() {

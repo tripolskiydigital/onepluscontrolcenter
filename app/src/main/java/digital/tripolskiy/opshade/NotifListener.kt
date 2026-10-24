@@ -54,6 +54,10 @@ class NotifListener : NotificationListenerService() {
         val items: StateFlow<List<NotifItem>> = _items
 
         fun component(ctx: Context) = ComponentName(ctx, NotifListener::class.java)
+
+        // Notification.FLAG_PROMOTED_ONGOING and EXTRA_REQUEST_PROMOTED_ONGOING (API 36), not in our SDK yet.
+        private const val FLAG_PROMOTED_ONGOING = 0x00040000
+        private const val EXTRA_REQUEST_PROMOTED_ONGOING = "android.requestPromotedOngoing"
     }
 
     private val iconCache = HashMap<String, ImageBitmap?>()
@@ -84,6 +88,20 @@ class NotifListener : NotificationListenerService() {
         (item.children.map { it.key } + item.key).distinct().forEach {
             try { snoozeNotification(it, millis) } catch (_: Exception) {}
         }
+    }
+
+    /**
+     * The tap target of the Live Update chip in the status bar (Android 16+ promoted ongoing
+     * notifications). SystemUI chips only the notifications it actually promoted; apps that merely
+     * asked for it count when nothing was promoted. With several, the most recently posted wins:
+     * that is the one SystemUI puts first, next to the clock.
+     */
+    fun promotedContentIntent(): PendingIntent? {
+        val active = try { activeNotifications } catch (_: Exception) { null } ?: return null
+        val ongoing = active.filter { it.isOngoing && it.notification.contentIntent != null }
+        val promoted = ongoing.filter { it.notification.flags and FLAG_PROMOTED_ONGOING != 0 }
+            .ifEmpty { ongoing.filter { it.notification.extras.getBoolean(EXTRA_REQUEST_PROMOTED_ONGOING) } }
+        return promoted.maxByOrNull { it.postTime }?.notification?.contentIntent
     }
 
     /** Re-reads the list, e.g. after screenshot mode was switched. */

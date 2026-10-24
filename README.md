@@ -84,6 +84,7 @@ Shizuku stops when the phone restarts, so start it again after each reboot.
 
 - `ShadeService` is an accessibility service with two overlay windows: a thin catcher over the status bar and the full-screen shade (Jetpack Compose, with blur behind).
 - **The system takes the top swipe.** On recent Android, SystemUI watches top-edge swipes with a spy input window and takes the pointer away once it recognises one. When that happens the catcher gets `ACTION_CANCEL`. The service then opens its own shade, which is layered above the system one, and dismisses the system shade. So the first pull opens the panel by itself rather than following the finger. Inside the panel every gesture belongs to the app.
+- **Live Update chips.** The catcher also keeps taps on the status bar chips of promoted notifications (Android 16+ Live Updates, e.g. a running timer) from reaching SystemUI, so a short tap left of the camera cutout sends the newest promoted notification's content intent, as tapping the chip would.
 - `ShadeController` holds the expansion: 0 is closed, 1 is notifications with the quick row, 2 is the full control center. It moves on critically damped springs.
 - `NotifListener` is a `NotificationListenerService`.
 - `Tiles.kt` and `TilesExtra.kt` have one class per tile. `TileCatalog` lists them, and `TileLayoutStore` saves the layout.
