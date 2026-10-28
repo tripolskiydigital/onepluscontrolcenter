@@ -11,6 +11,7 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.graphics.PixelFormat
 import android.os.Build
+import android.os.PowerManager
 import android.view.Gravity
 import android.view.KeyEvent
 import android.view.MotionEvent
@@ -66,8 +67,6 @@ class ShadeService : AccessibilityService(), TileHost {
 
     override val context: Context get() = this
 
-    private val keyguardListener = KeyguardManager.KeyguardLockedStateListener { updateCatcher() }
-
     private val screenReceiver = object : BroadcastReceiver() {
         override fun onReceive(c: Context, i: Intent) {
             if (i.action == Intent.ACTION_SCREEN_OFF) controller.closeNow()
@@ -103,9 +102,6 @@ class ShadeService : AccessibilityService(), TileHost {
             addAction(Intent.ACTION_SCREEN_ON)
             addAction(Intent.ACTION_USER_PRESENT)
         })
-        // USER_PRESENT can arrive seconds after an unlock, and until then the catcher stays off and
-        // the system shade answers the pull. The keyguard listener reports the unlock right away.
-        getSystemService(KeyguardManager::class.java).addKeyguardLockedStateListener(mainExecutor, keyguardListener)
         updateCatcher()
 
         scope.launch {
@@ -140,7 +136,7 @@ class ShadeService : AccessibilityService(), TileHost {
             performGlobalAction(GLOBAL_ACTION_DISMISS_NOTIFICATION_SHADE)
         }
         if (event.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return
-        // A window change also follows an unlock; re-check in case the keyguard callback was late.
+        // A window change also follows an unlock; re-check in case the poll hasn't caught it yet.
         updateCatcher()
         if (pkg == packageName || pkg == "com.android.systemui") return
         if (!controller.isOpen) {
@@ -175,7 +171,6 @@ class ShadeService : AccessibilityService(), TileHost {
     override fun onDestroy() {
         running = null
         try { unregisterReceiver(screenReceiver) } catch (_: Exception) {}
-        try { getSystemService(KeyguardManager::class.java).removeKeyguardLockedStateListener(keyguardListener) } catch (_: Exception) {}
         try { wm.removeView(catcher) } catch (_: Exception) {}
         try { wm.removeView(shadeRoot) } catch (_: Exception) {}
         owner.destroy()
@@ -375,10 +370,12 @@ class ShadeService : AccessibilityService(), TileHost {
     }
 
     private var catcherLocked: Boolean? = null
+    private var unlockWatch: Job? = null
 
     private fun updateCatcher() {
         if (!::catcher.isInitialized) return
         val locked = getSystemService(KeyguardManager::class.java).isKeyguardLocked
+        if (locked) watchUnlock()
         if (locked == catcherLocked) return
         catcherLocked = locked
         android.util.Log.d("OpShade", "catcher " + if (locked) "off (locked)" else "on")
@@ -386,6 +383,21 @@ class ShadeService : AccessibilityService(), TileHost {
         val f = WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
         catcherParams.flags = if (locked) catcherParams.flags or f else catcherParams.flags and f.inv()
         wm.updateViewLayout(catcher, catcherParams)
+    }
+
+    /**
+     * USER_PRESENT can arrive seconds after an unlock, and until then the catcher stays off and the
+     * system shade answers the pull. The callback that reports the unlock at once needs a system
+     * permission, so while the screen is on and locked, poll the keyguard instead.
+     */
+    private fun watchUnlock() {
+        if (unlockWatch?.isActive == true) return
+        unlockWatch = scope.launch {
+            val power = getSystemService(PowerManager::class.java)
+            val keyguard = getSystemService(KeyguardManager::class.java)
+            while (power.isInteractive && keyguard.isKeyguardLocked) delay(250)
+            updateCatcher()
+        }
     }
 
     // endregion
