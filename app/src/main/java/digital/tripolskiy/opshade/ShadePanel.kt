@@ -96,6 +96,15 @@ import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.ui.zIndex
+import androidx.compose.foundation.gestures.animateScrollBy
+import androidx.compose.foundation.lazy.LazyListLayoutInfo
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.graphics.drawscope.clipRect
+import androidx.compose.ui.input.pointer.PointerEventPass
+import kotlin.math.abs
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -188,6 +197,8 @@ fun ShadePanel(controller: ShadeController, tiles: TileRepository, host: ShadeSe
                     },
             ) {
                 val listState = rememberLazyListState()
+                val stack = with(LocalDensity.current) { StackMetrics(STACK_STEP.u.toPx(), STACK_PEEK.u.toPx(), 8.u.toPx(), STACK_OVERSCAN.u.toPx()) }
+                val scope = rememberCoroutineScope()
                 // Only one card's swipe menu is open at a time, and scrolling folds it.
                 var menuKey by remember { mutableStateOf<String?>(null) }
                 LaunchedEffect(listState.isScrollInProgress) { if (listState.isScrollInProgress) menuKey = null }
@@ -197,11 +208,14 @@ fun ShadePanel(controller: ShadeController, tiles: TileRepository, host: ShadeSe
                 // Also on opening: a player can be inserted above the anchored first card meanwhile.
                 LaunchedEffect(closed) { menuKey = null; listState.scrollToItem(0) }
                 LazyColumn(
-                    Modifier.fillMaxSize().nestedScroll(nested),
+                    Modifier
+                        .stackOverscan(stack.overscan)
+                        .stackHandle(listState, controller, maxStage, stack) { scope.launch { listState.animateScrollBy(stack.step * 2f) } }
+                        .nestedScroll(nested),
                     state = listState,
                     contentPadding = PaddingValues(
                         start = 16.u, end = 16.u,
-                        bottom = 24.u + WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding(),
+                        bottom = 24.u + WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding() + STACK_OVERSCAN.u,
                     ),
                     userScrollEnabled = listScrolls,
                 ) {
@@ -210,7 +224,7 @@ fun ShadePanel(controller: ShadeController, tiles: TileRepository, host: ShadeSe
                             MediaCarousel(media, host, Modifier.padding(bottom = 8.u).animateItem())
                         }
                     }
-                    items(visibleNotifs, key = { it.key }) { n ->
+                    itemsIndexed(visibleNotifs, key = { _, it -> it.key }, contentType = { _, _ -> NOTIF }) { index, n ->
                         NotificationCard(
                             n,
                             onOpen = { item ->
@@ -245,7 +259,12 @@ fun ShadePanel(controller: ShadeController, tiles: TileRepository, host: ShadeSe
                             },
                             menuOpen = menuKey == n.key,
                             onMenuOpenChange = { open -> menuKey = if (open) n.key else if (menuKey == n.key) null else menuKey },
-                            modifier = Modifier.padding(bottom = 8.u).animateItem(),
+                            // Later cards slide under earlier ones in the stack at the bottom.
+                            modifier = Modifier
+                                .zIndex(-index.toFloat())
+                                .stacked(listState, n.key, stack)
+                                .padding(bottom = 8.u)
+                                .animateItem(),
                         )
                     }
                     // Clear all sits after the last card, as on Pixel, instead of floating over the list.
@@ -342,6 +361,104 @@ fun ShadePanel(controller: ShadeController, tiles: TileRepository, host: ShadeSe
                 )
             }
 
+        }
+    }
+}
+
+private const val NOTIF = "notif"
+/** Scroll distance, in u, over which a card sinks one layer deeper into the stack. */
+private const val STACK_STEP = 90f
+/** How far, in u, each layer's edge shows below the one in front of it. */
+private const val STACK_PEEK = 7f
+/** Extra list height below the screen, in u, so the cards behind the stack get composed. */
+private const val STACK_OVERSCAN = 240f
+
+private class StackMetrics(val step: Float, val peek: Float, val gap: Float, val overscan: Float)
+
+/** Where the front card's bottom rests (item bottom, gap included), in list coordinates. */
+private fun stackLine(info: LazyListLayoutInfo, m: StackMetrics) =
+    info.viewportEndOffset - info.afterContentPadding - 2 * m.peek
+
+/**
+ * OxygenOS stacks the notifications that run off the bottom of the list. A card whose bottom
+ * crosses the stack line stops there and the cards behind it pile up under it, each showing only a
+ * narrower edge [StackMetrics.peek] lower; two layers show, deeper ones fade in as they come up.
+ * Scrolling peels cards off the top of the stack, so nothing jumps. Reads the layout in the draw
+ * phase only.
+ */
+private fun Modifier.stacked(state: LazyListState, key: Any, m: StackMetrics) = graphicsLayer {
+    val info = state.layoutInfo
+    val item = info.visibleItemsInfo.firstOrNull { it.key == key } ?: return@graphicsLayer
+    val line = stackLine(info, m)
+    val bottom = (item.offset + item.size).toFloat()
+    if (bottom <= line) return@graphicsLayer
+    // A card taller than a stack step would vanish under the one before it while its top is still
+    // in view; its top never rises above a step over the line, so it is held there instead.
+    val room = (item.offset - (line - m.step)).coerceAtLeast(0f)
+    val depth = minOf((bottom - line) / m.step, room / m.step)
+    val layer = depth.coerceAtMost(2f)
+    translationY = maxOf(line + m.peek * layer - bottom, -room)
+    val sc = 1f - 0.045f * layer
+    scaleX = sc
+    scaleY = sc
+    transformOrigin = TransformOrigin(0.5f, 1f)
+    alpha = (1f - 0.15f * (depth - 1f).coerceIn(0f, 1f)) * (1f - (depth - 2f).coerceIn(0f, 1f))
+}
+
+/**
+ * Makes the list [extra] px taller than its slot, hanging below the screen, and clips what is
+ * drawn there: the cards behind the stack then exist to be drawn. The bottom content padding grows
+ * by the same amount, so the list still ends where it did.
+ */
+private fun Modifier.stackOverscan(extra: Float) = layout { m, c ->
+    val e = extra.roundToInt()
+    val p = m.measure(c.copy(minHeight = c.maxHeight + e, maxHeight = c.maxHeight + e))
+    layout(p.width, c.maxHeight) { p.place(0, 0) }
+}.drawWithContent { clipRect(bottom = size.height - extra) { this@drawWithContent.drawContent() } }
+
+/**
+ * The stack is the handle, as on OxygenOS: a push up that starts on it closes the shade instead of
+ * scrolling, and a tap pulls cards out of it. A pull down still scrolls the list back, and sideways
+ * swipes still reach the card. Watches on the initial pass, so the cards never see a gesture it
+ * takes, not even as a press.
+ */
+private fun Modifier.stackHandle(
+    state: LazyListState,
+    controller: ShadeController,
+    maxStage: Float,
+    m: StackMetrics,
+    onTap: () -> Unit,
+) = pointerInput(state, controller, maxStage) {
+    val slop = viewConfiguration.touchSlop
+    awaitEachGesture {
+        val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+        val info = state.layoutInfo
+        val line = stackLine(info, m)
+        val stacked = info.visibleItemsInfo.any { it.contentType == NOTIF && it.offset + it.size > line }
+        // A little above the front card's bottom edge too, so the handle is easy to hit.
+        if (!stacked || down.position.y < line - m.gap - m.peek * 2) return@awaitEachGesture
+        val tracker = VelocityTracker()
+        tracker.addPosition(down.uptimeMillis, down.position)
+        var dragging = false
+        while (true) {
+            val ch = awaitPointerEvent(PointerEventPass.Initial).changes.firstOrNull { it.id == down.id } ?: break
+            tracker.addPosition(ch.uptimeMillis, ch.position)
+            val total = ch.position - down.position
+            if (!ch.pressed) {
+                if (dragging) controller.settle(tracker.calculateVelocity().y, maxStage)
+                else if (total.getDistance() < slop) onTap()
+                ch.consume()
+                break
+            }
+            if (dragging) {
+                controller.dragBy(ch.position.y - ch.previousPosition.y, maxStage)
+                ch.consume()
+            } else if (abs(total.y) > slop && abs(total.y) > abs(total.x)) {
+                if (total.y > 0) break
+                dragging = true
+                controller.dragBy(total.y + slop, maxStage)
+                ch.consume()
+            } else if (abs(total.x) > slop) break
         }
     }
 }
