@@ -66,6 +66,8 @@ class ShadeService : AccessibilityService(), TileHost {
 
     override val context: Context get() = this
 
+    private val keyguardListener = KeyguardManager.KeyguardLockedStateListener { updateCatcher() }
+
     private val screenReceiver = object : BroadcastReceiver() {
         override fun onReceive(c: Context, i: Intent) {
             if (i.action == Intent.ACTION_SCREEN_OFF) controller.closeNow()
@@ -82,8 +84,9 @@ class ShadeService : AccessibilityService(), TileHost {
         blurEnabled = wm.isCrossWindowBlurEnabled
 
         val dm = resources.displayMetrics
-        // Layouts are proportional to the OnePlus 12's 360dp width, so distances scale the same way.
-        val unit = dm.density * (dm.widthPixels / dm.density / 360f)
+        // Layouts are proportional to the OnePlus 12's 360dp width, so distances scale the same way
+        // (from the short side, as the panel does, so a landscape start doesn't stretch them).
+        val unit = dm.density * (minOf(dm.widthPixels, dm.heightPixels) / dm.density / 360f)
         controller = ShadeController(
             scope,
             openDistance = 150f * unit,
@@ -100,6 +103,9 @@ class ShadeService : AccessibilityService(), TileHost {
             addAction(Intent.ACTION_SCREEN_ON)
             addAction(Intent.ACTION_USER_PRESENT)
         })
+        // USER_PRESENT can arrive seconds after an unlock, and until then the catcher stays off and
+        // the system shade answers the pull. The keyguard listener reports the unlock right away.
+        getSystemService(KeyguardManager::class.java).addKeyguardLockedStateListener(mainExecutor, keyguardListener)
         updateCatcher()
 
         scope.launch {
@@ -133,7 +139,10 @@ class ShadeService : AccessibilityService(), TileHost {
         ) {
             performGlobalAction(GLOBAL_ACTION_DISMISS_NOTIFICATION_SHADE)
         }
-        if (event.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED || pkg == packageName || pkg == "com.android.systemui") return
+        if (event.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return
+        // A window change also follows an unlock; re-check in case the keyguard callback was late.
+        updateCatcher()
+        if (pkg == packageName || pkg == "com.android.systemui") return
         if (!controller.isOpen) {
             // Remember what is on screen under the shade.
             frontPkg = pkg
@@ -166,6 +175,7 @@ class ShadeService : AccessibilityService(), TileHost {
     override fun onDestroy() {
         running = null
         try { unregisterReceiver(screenReceiver) } catch (_: Exception) {}
+        try { getSystemService(KeyguardManager::class.java).removeKeyguardLockedStateListener(keyguardListener) } catch (_: Exception) {}
         try { wm.removeView(catcher) } catch (_: Exception) {}
         try { wm.removeView(shadeRoot) } catch (_: Exception) {}
         owner.destroy()
@@ -266,6 +276,25 @@ class ShadeService : AccessibilityService(), TileHost {
 
     private fun addShadeWindow() {
         shadeRoot = object : FrameLayout(this) {
+            private var downInGestureZone = false
+
+            // A swipe up from the bottom edge is the system's home gesture: the launcher takes the
+            // pointer (we get ACTION_CANCEL). If the launcher was already in front no window changes,
+            // so nothing else would close the shade; treat that cancel as "collapse".
+            override fun dispatchTouchEvent(e: MotionEvent): Boolean {
+                when (e.actionMasked) {
+                    MotionEvent.ACTION_DOWN -> {
+                        val zone = rootWindowInsets?.getInsets(android.view.WindowInsets.Type.mandatorySystemGestures())?.bottom ?: 0
+                        downInGestureZone = zone > 0 && e.y >= height - zone - 8 * resources.displayMetrics.density
+                    }
+                    MotionEvent.ACTION_CANCEL -> if (downInGestureZone && controller.isOpen) {
+                        android.util.Log.d("OpShade", "closing: home gesture from the bottom edge")
+                        controller.close()
+                    }
+                }
+                return super.dispatchTouchEvent(e)
+            }
+
             override fun dispatchKeyEvent(event: KeyEvent): Boolean {
                 if (event.keyCode == KeyEvent.KEYCODE_BACK) {
                     if (event.action == KeyEvent.ACTION_UP) {
@@ -345,9 +374,14 @@ class ShadeService : AccessibilityService(), TileHost {
         }
     }
 
+    private var catcherLocked: Boolean? = null
+
     private fun updateCatcher() {
         if (!::catcher.isInitialized) return
         val locked = getSystemService(KeyguardManager::class.java).isKeyguardLocked
+        if (locked == catcherLocked) return
+        catcherLocked = locked
+        android.util.Log.d("OpShade", "catcher " + if (locked) "off (locked)" else "on")
         catcher.visibility = if (locked) View.GONE else View.VISIBLE
         val f = WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
         catcherParams.flags = if (locked) catcherParams.flags or f else catcherParams.flags and f.inv()
