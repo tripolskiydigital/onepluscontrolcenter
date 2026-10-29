@@ -17,6 +17,7 @@ import android.os.Handler
 import android.os.Looper
 import android.os.PowerManager
 import android.provider.Settings
+import android.widget.Toast
 import android.telephony.SubscriptionManager
 import android.telephony.TelephonyManager
 import androidx.compose.material.icons.Icons
@@ -374,6 +375,10 @@ class TileRepository(private val ctx: Context) {
     }
 
     fun click(tile: Tile, host: TileHost) {
+        // Without Shizuku these tiles can only open the system panel; say why, or it looks broken.
+        if (tile.needsShizuku && !Shell.available()) {
+            Toast.makeText(host.context, "Shizuku isn't running, so this opens settings. Start Shizuku to switch it here.", Toast.LENGTH_LONG).show()
+        }
         scope.launch {
             val expected = tile.click(host)
             if (expected != null) {
