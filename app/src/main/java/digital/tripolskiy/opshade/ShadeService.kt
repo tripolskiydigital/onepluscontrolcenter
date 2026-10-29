@@ -11,6 +11,7 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.graphics.PixelFormat
 import android.os.Build
+import android.os.PowerManager
 import android.view.Gravity
 import android.view.KeyEvent
 import android.view.MotionEvent
@@ -82,8 +83,9 @@ class ShadeService : AccessibilityService(), TileHost {
         blurEnabled = wm.isCrossWindowBlurEnabled
 
         val dm = resources.displayMetrics
-        // Layouts are proportional to the OnePlus 12's 360dp width, so distances scale the same way.
-        val unit = dm.density * (dm.widthPixels / dm.density / 360f)
+        // Layouts are proportional to the OnePlus 12's 360dp width, so distances scale the same way
+        // (from the short side, as the panel does, so a landscape start doesn't stretch them).
+        val unit = dm.density * (minOf(dm.widthPixels, dm.heightPixels) / dm.density / 360f)
         controller = ShadeController(
             scope,
             openDistance = 150f * unit,
@@ -133,7 +135,10 @@ class ShadeService : AccessibilityService(), TileHost {
         ) {
             performGlobalAction(GLOBAL_ACTION_DISMISS_NOTIFICATION_SHADE)
         }
-        if (event.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED || pkg == packageName || pkg == "com.android.systemui") return
+        if (event.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return
+        // A window change also follows an unlock; re-check in case the poll hasn't caught it yet.
+        updateCatcher()
+        if (pkg == packageName || pkg == "com.android.systemui") return
         if (!controller.isOpen) {
             // Remember what is on screen under the shade.
             frontPkg = pkg
@@ -197,6 +202,8 @@ class ShadeService : AccessibilityService(), TileHost {
         catcherParams = baseParams(statusBarHeight(), WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE)
             .apply { title = "OpShadeCatcher" }
         val slop = ViewConfiguration.get(this).scaledTouchSlop
+        val tapTimeout = ViewConfiguration.getLongPressTimeout()
+        var downX = 0f
         var downY = 0f
         var lastY = 0f
         var dragging = false
@@ -206,7 +213,7 @@ class ShadeService : AccessibilityService(), TileHost {
         catcher.setOnTouchListener { _, e ->
             when (e.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
-                    downY = e.rawY; lastY = e.rawY; dragging = false; twoFinger = false
+                    downX = e.rawX; downY = e.rawY; lastY = e.rawY; dragging = false; twoFinger = false
                     tracker?.recycle(); tracker = VelocityTracker.obtain()
                     tracker?.addMovement(e)
                     tiles.refresh()
@@ -231,6 +238,7 @@ class ShadeService : AccessibilityService(), TileHost {
                     val vy = tracker?.yVelocity ?: 0f
                     tracker?.recycle(); tracker = null
                     if (dragging) controller.settle(vy, maxStage = if (twoFinger) 2f else 1f)
+                    else if (!twoFinger && e.eventTime - e.downTime < tapTimeout && abs(e.rawX - downX) < slop) onStatusBarTap(downX)
                     dragging = false
                 }
                 MotionEvent.ACTION_CANCEL -> {
@@ -247,8 +255,41 @@ class ShadeService : AccessibilityService(), TileHost {
         wm.addView(catcher, catcherParams)
     }
 
+    /**
+     * The catcher covers the status bar, so SystemUI never sees taps on its Live Update chips.
+     * A tap left of the camera cutout, where the chips sit after the clock, opens the promoted
+     * notification the way the chip would.
+     */
+    private fun onStatusBarTap(x: Float) {
+        val cutout = wm.currentWindowMetrics.windowInsets.displayCutout?.boundingRectTop
+        val chipsEnd = if (cutout != null && !cutout.isEmpty) cutout.left else wm.currentWindowMetrics.bounds.width() / 2
+        if (x >= chipsEnd) return
+        val pi = NotifListener.instance?.promotedContentIntent() ?: return
+        android.util.Log.d("OpShade", "status bar tap at x=$x: opening Live Update ${pi.creatorPackage}")
+        sendPendingIntent(pi, closeShade = false)
+    }
+
     private fun addShadeWindow() {
         shadeRoot = object : FrameLayout(this) {
+            private var downInGestureZone = false
+
+            // A swipe up from the bottom edge is the system's home gesture: the launcher takes the
+            // pointer (we get ACTION_CANCEL). If the launcher was already in front no window changes,
+            // so nothing else would close the shade; treat that cancel as "collapse".
+            override fun dispatchTouchEvent(e: MotionEvent): Boolean {
+                when (e.actionMasked) {
+                    MotionEvent.ACTION_DOWN -> {
+                        val zone = rootWindowInsets?.getInsets(android.view.WindowInsets.Type.mandatorySystemGestures())?.bottom ?: 0
+                        downInGestureZone = zone > 0 && e.y >= height - zone - 8 * resources.displayMetrics.density
+                    }
+                    MotionEvent.ACTION_CANCEL -> if (downInGestureZone && controller.isOpen) {
+                        android.util.Log.d("OpShade", "closing: home gesture from the bottom edge")
+                        controller.close()
+                    }
+                }
+                return super.dispatchTouchEvent(e)
+            }
+
             override fun dispatchKeyEvent(event: KeyEvent): Boolean {
                 if (event.keyCode == KeyEvent.KEYCODE_BACK) {
                     if (event.action == KeyEvent.ACTION_UP) {
@@ -328,13 +369,35 @@ class ShadeService : AccessibilityService(), TileHost {
         }
     }
 
+    private var catcherLocked: Boolean? = null
+    private var unlockWatch: Job? = null
+
     private fun updateCatcher() {
         if (!::catcher.isInitialized) return
         val locked = getSystemService(KeyguardManager::class.java).isKeyguardLocked
+        if (locked) watchUnlock()
+        if (locked == catcherLocked) return
+        catcherLocked = locked
+        android.util.Log.d("OpShade", "catcher " + if (locked) "off (locked)" else "on")
         catcher.visibility = if (locked) View.GONE else View.VISIBLE
         val f = WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
         catcherParams.flags = if (locked) catcherParams.flags or f else catcherParams.flags and f.inv()
         wm.updateViewLayout(catcher, catcherParams)
+    }
+
+    /**
+     * USER_PRESENT can arrive seconds after an unlock, and until then the catcher stays off and the
+     * system shade answers the pull. The callback that reports the unlock at once needs a system
+     * permission, so while the screen is on and locked, poll the keyguard instead.
+     */
+    private fun watchUnlock() {
+        if (unlockWatch?.isActive == true) return
+        unlockWatch = scope.launch {
+            val power = getSystemService(PowerManager::class.java)
+            val keyguard = getSystemService(KeyguardManager::class.java)
+            while (power.isInteractive && keyguard.isKeyguardLocked) delay(250)
+            updateCatcher()
+        }
     }
 
     // endregion
@@ -357,8 +420,8 @@ class ShadeService : AccessibilityService(), TileHost {
 
     // endregion
 
-    fun sendPendingIntent(pi: PendingIntent?) {
-        controller.close()
+    fun sendPendingIntent(pi: PendingIntent?, closeShade: Boolean = true) {
+        if (closeShade) controller.close()
         pi ?: return
         val options = ActivityOptions.makeBasic()
         if (Build.VERSION.SDK_INT >= 34) {

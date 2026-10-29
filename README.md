@@ -42,6 +42,7 @@ The OxygenOS 16 notification shade and control center, rebuilt for Google Pixel.
 - **Notifications.** They are grouped and in ranking order. The expand arrow shows only when there is more to see. Expanding reveals the full text, the conversation, big pictures and action buttons, also for each notification inside a group. **Reply** opens a reply panel with the keyboard. Progress bars show in every state. Clear all removes everything. Swiping works as on OxygenOS:
   - **right** deletes, and a red badge shows when letting go will delete;
   - **left** opens *remind me in 1 hour*, *notification settings* and *delete*; dragging further stretches the delete button.
+  - ongoing cards (a running timer) can be deleted only when the app gave them a delete intent; deleting sends it, as Pixel's shade does, so the timer stops. Other ongoing cards don't swipe away.
 - **Pixel colours.** Everything uses Material You colours (wallpaper colours, light and dark), mapped to the same roles Pixel's own shade uses.
 - **120 Hz.** Animations never recompose, and the shade window asks for the panel's full refresh rate.
 
@@ -84,6 +85,7 @@ Shizuku stops when the phone restarts, so start it again after each reboot.
 
 - `ShadeService` is an accessibility service with two overlay windows: a thin catcher over the status bar and the full-screen shade (Jetpack Compose, with blur behind).
 - **The system takes the top swipe.** On recent Android, SystemUI watches top-edge swipes with a spy input window and takes the pointer away once it recognises one. When that happens the catcher gets `ACTION_CANCEL`. The service then opens its own shade, which is layered above the system one, and dismisses the system shade. So the first pull opens the panel by itself rather than following the finger. Inside the panel every gesture belongs to the app.
+- **Live Update chips.** The catcher also keeps taps on the status bar chips of promoted notifications (Android 16+ Live Updates, e.g. a running timer) from reaching SystemUI, so a short tap left of the camera cutout sends the newest promoted notification's content intent, as tapping the chip would.
 - `ShadeController` holds the expansion: 0 is closed, 1 is notifications with the quick row, 2 is the full control center. It moves on critically damped springs.
 - `NotifListener` is a `NotificationListenerService`.
 - `Tiles.kt` and `TilesExtra.kt` have one class per tile. `TileCatalog` lists them, and `TileLayoutStore` saves the layout.

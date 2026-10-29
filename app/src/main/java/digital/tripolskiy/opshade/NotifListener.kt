@@ -30,6 +30,8 @@ data class NotifItem(
     val actions: List<Notification.Action>,
     val contentIntent: PendingIntent?,
     val autoCancel: Boolean,
+    /** Sent by us when an ongoing card is swiped away, e.g. stops a running timer. */
+    val deleteIntent: PendingIntent? = null,
     val channelId: String? = null,
     /** Non-empty for a group: the individual notifications, newest first. */
     val children: List<NotifItem> = emptyList(),
@@ -40,6 +42,13 @@ data class NotifItem(
     /** Progress bar: 0..1, or -1 for indeterminate; null when there is none. */
     val progress: Float? = null,
 ) {
+    /**
+     * Whether swiping the card away does something: the system cancels it, or, for an ongoing one
+     * the system won't cancel, the app gets its delete intent (a Clocks timer stops).
+     */
+    val dismissable: Boolean
+        get() = clearable || deleteIntent != null || children.any { it.dismissable }
+
     /** Whether expanding shows more than the collapsed card (the text may also just be ellipsized). */
     val hasMore: Boolean
         get() = children.isNotEmpty() || bigText != null || picture != null || messages.size > 1 || actions.isNotEmpty()
@@ -54,6 +63,10 @@ class NotifListener : NotificationListenerService() {
         val items: StateFlow<List<NotifItem>> = _items
 
         fun component(ctx: Context) = ComponentName(ctx, NotifListener::class.java)
+
+        // Notification.FLAG_PROMOTED_ONGOING and EXTRA_REQUEST_PROMOTED_ONGOING (API 36), not in our SDK yet.
+        private const val FLAG_PROMOTED_ONGOING = 0x00040000
+        private const val EXTRA_REQUEST_PROMOTED_ONGOING = "android.requestPromotedOngoing"
     }
 
     private val iconCache = HashMap<String, ImageBitmap?>()
@@ -73,8 +86,21 @@ class NotifListener : NotificationListenerService() {
     override fun onNotificationRankingUpdate(rankingMap: RankingMap?) = rebuild()
 
     fun dismiss(item: NotifItem) {
-        if (item.children.isEmpty()) cancelNotification(item.key)
-        else (item.children.map { it.key } + item.key).forEach { cancelNotification(it) }
+        if (item.children.isEmpty()) dismissOne(item)
+        else {
+            item.children.forEach(::dismissOne)
+            cancelNotification(item.key)
+        }
+    }
+
+    /**
+     * The system ignores cancels of ongoing notifications from a listener, and only sends the delete
+     * intent for ones it cancels itself. So for an ongoing card send it ourselves, as Pixel's shade
+     * does when such a card is swiped.
+     */
+    private fun dismissOne(item: NotifItem) {
+        if (item.clearable) cancelNotification(item.key)
+        else try { item.deleteIntent?.send() } catch (_: Exception) {}
     }
 
     fun dismissAll() = cancelAllNotifications()
@@ -84,6 +110,20 @@ class NotifListener : NotificationListenerService() {
         (item.children.map { it.key } + item.key).distinct().forEach {
             try { snoozeNotification(it, millis) } catch (_: Exception) {}
         }
+    }
+
+    /**
+     * The tap target of the Live Update chip in the status bar (Android 16+ promoted ongoing
+     * notifications). SystemUI chips only the notifications it actually promoted; apps that merely
+     * asked for it count when nothing was promoted. With several, the most recently posted wins:
+     * that is the one SystemUI puts first, next to the clock.
+     */
+    fun promotedContentIntent(): PendingIntent? {
+        val active = try { activeNotifications } catch (_: Exception) { null } ?: return null
+        val ongoing = active.filter { it.isOngoing && it.notification.contentIntent != null }
+        val promoted = ongoing.filter { it.notification.flags and FLAG_PROMOTED_ONGOING != 0 }
+            .ifEmpty { ongoing.filter { it.notification.extras.getBoolean(EXTRA_REQUEST_PROMOTED_ONGOING) } }
+        return promoted.maxByOrNull { it.postTime }?.notification?.contentIntent
     }
 
     /** Re-reads the list, e.g. after screenshot mode was switched. */
@@ -180,6 +220,7 @@ class NotifListener : NotificationListenerService() {
             actions = n.actions?.toList().orEmpty(),
             contentIntent = n.contentIntent,
             autoCancel = n.flags and Notification.FLAG_AUTO_CANCEL != 0,
+            deleteIntent = n.deleteIntent,
             channelId = n.channelId,
             picture = picture(n),
             messages = history.takeLast(6),
